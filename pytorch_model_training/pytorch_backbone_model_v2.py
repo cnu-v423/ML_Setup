@@ -8,10 +8,97 @@ import rasterio
 from skimage import exposure
 import segmentation_models_pytorch as smp
 import torchvision.transforms.functional as TF
-
+import cv2
+import albumentations as A
 
 
 class Channel3_DataGenerator_old(Dataset):
+    """Custom data generator adapted for preprocessed uint8 RGB images with albumentations augmentations for PyTorch training."""
+    def __init__(self, image_paths, mask_paths, config, is_training=True):
+        self.image_paths = image_paths
+        self.mask_paths = mask_paths
+        self.input_size = config['data']['input_size']
+        self.is_training = is_training
+        self.indexes = np.arange(len(image_paths))
+        if self.is_training:
+            np.random.shuffle(self.indexes)
+
+        # Build augmentation pipeline (only used during training)
+        if self.is_training:
+            self.aug = A.Compose([
+                A.HorizontalFlip(p=0.5),
+                A.VerticalFlip(p=0.3),
+                A.RandomRotate90(p=0.3),                            # 0/90/180/270
+                A.Rotate(limit=360, p=0.15),                       # broader rotations (0-360)
+                A.ShiftScaleRotate(shift_limit=0.0625,              # small shifts
+                                   scale_limit=0.1,                 # small scale changes
+                                   rotate_limit=15,                 # slight rotations
+                                   p=0.5,
+                                   border_mode=cv2.BORDER_REFLECT),
+                A.RandomCrop(height=self.input_size, width=self.input_size, p=0.3),
+                A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.3, p=0.5),
+                A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=10, p=0.3),
+                A.GaussNoise(var_limit=(10.0, 50.0), p=0.15),
+                A.GaussianBlur(blur_limit=3, p=0.1),
+            ], additional_targets={'mask': 'mask'})
+        else:
+            self.aug = None
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, index):
+        idx = self.indexes[index]
+
+        # Load preprocessed RGB image (CHW), already uint8 originally but here reading as numeric
+        with rasterio.open(self.image_paths[idx]) as src:
+            image = src.read()                      # shape: (C, H, W)
+            image = image.astype(np.float32) / 255.0  # scale to 0-1 float32
+
+        # Load and preprocess mask (H, W)
+        with rasterio.open(self.mask_paths[idx]) as src:
+            mask = src.read(1)                      # shape: (H, W)
+            mask = (mask > 0).astype(np.uint8)      # keep as 0/1 uint8 for albumentations
+
+        # Apply augmentations (if training)
+        if self.is_training and self.aug is not None:
+            # Convert CHW -> HWC and float -> uint8 (albumentations expects 0-255 images)
+            img_hwc = np.moveaxis(image, 0, -1)            # H, W, C
+            img_uint8 = (img_hwc * 255.0).clip(0, 255).astype(np.uint8)
+            mask_hwc = np.expand_dims(mask, axis=-1)       # H, W, 1 (uint8)
+
+            augmented = self.aug(image=img_uint8, mask=mask_hwc)
+            img_aug = augmented['image']
+            mask_aug = augmented['mask']
+
+            # Convert back to float [0,1] and CHW
+            img_aug = img_aug.astype(np.float32) / 255.0
+            image = np.moveaxis(img_aug, -1, 0)            # C, H, W
+
+            # Ensure mask is (1, H, W) float32
+            if mask_aug.ndim == 3 and mask_aug.shape[-1] == 1:
+                mask = mask_aug.squeeze(-1).astype(np.float32)
+            else:
+                mask = mask_aug.astype(np.float32)
+            mask = np.expand_dims(mask, axis=0)            # 1, H, W
+        else:
+            # Ensure shapes / types are consistent if no augmentation
+            image = image.astype(np.float32)
+            mask = mask.astype(np.float32)
+            mask = np.expand_dims(mask, axis=0)            # 1, H, W
+
+        # Convert to torch tensors
+        image_tensor = torch.from_numpy(image).float()
+        mask_tensor = torch.from_numpy(mask).float()
+
+        return image_tensor, mask_tensor
+
+    def on_epoch_end(self):
+        if self.is_training:
+            np.random.shuffle(self.indexes)
+
+
+class Channel3_DataGenerator_older(Dataset):
     """Custom data generator adapted for preprocessed uint8 RGB images"""
     def __init__(self, image_paths, mask_paths, config, is_training=True):
         self.image_paths = image_paths
