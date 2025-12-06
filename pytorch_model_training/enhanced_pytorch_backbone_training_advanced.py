@@ -1,6 +1,4 @@
 # ENHANCED TRAINING FUNCTIONS WITH LOGGING AND PROGRESS BARS
-import sys
-sys.path.append("/kaggle/input/pytorch-model-training-new/pytorch_model_training")
 
 import os
 import yaml
@@ -1051,7 +1049,7 @@ if __name__ == "__main__":
     parser.add_argument('--run_name', required=False, help='Name of the MLFlow Run')
     args = parser.parse_args()
 
-    with open('/kaggle/input/pytorch-model-training-new/pytorch_model_training/config_v1.yaml', 'r') as f:
+    with open('config_v1.yaml', 'r') as f:
         config = yaml.safe_load(f)
 
     set_gpu()

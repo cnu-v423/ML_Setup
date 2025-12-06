@@ -1,5 +1,3 @@
-import sys
-sys.path.append("/kaggle/input/pytorch-model-training-new/pytorch_model_training")
 
 import argparse
 from ensemble_triton_pytorch_predictor_with_waterbody_test import EnsemblePredictor
