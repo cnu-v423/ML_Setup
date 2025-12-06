@@ -1,4 +1,6 @@
 import sys
+sys.path.append("/kaggle/input/pytorch-model-training-new/pytorch_model_training")
+
 from pathlib import Path
 import os
 from skimage import io

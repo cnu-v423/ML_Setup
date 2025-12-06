@@ -7,6 +7,8 @@ import numpy as np
 import rasterio
 from skimage import exposure
 import segmentation_models_pytorch as smp
+import torchvision.transforms.functional as TF
+
 
 
 class Channel3_DataGenerator_old(Dataset):
@@ -37,8 +39,38 @@ class Channel3_DataGenerator_old(Dataset):
             mask = src.read(1)
             mask = (mask > 0).astype(np.float32)
             mask = np.expand_dims(mask, axis=0)
+
+        # ADD ROTATION AUGMENTATION DURING TRAINING
+        if self.is_training:
+            # Random rotation: 0°, 90°, 180°, 270° (or continuous: -45° to 45°)
+            angle = float(np.random.choice([0, 90, 180, 270]))  # 90-degree rotations
+            # OR for continuous rotation:
+            # angle = np.random.uniform(-45, 45)  # Random angle between -45 and 45 degrees
             
+            image, mask = self.rotate_image_and_mask(image, mask, angle)
+                
         return torch.from_numpy(image), torch.from_numpy(mask)
+    
+        
+    def rotate_image_and_mask(self, image, mask, angle):
+        """
+        Rotate image and mask by the same angle to keep alignment.
+        Args:
+            image: numpy array of shape (C, H, W)
+            mask: numpy array of shape (1, H, W) or (C, H, W)
+            angle: rotation angle in degrees (negative=counter-clockwise)
+        Returns:
+            rotated image and mask as numpy arrays
+        """
+        # Convert to torch tensors
+        image_tensor = torch.from_numpy(image)
+        mask_tensor = torch.from_numpy(mask)
+        
+        # Apply rotation to both
+        image_rotated = TF.rotate(image_tensor, angle, fill=0)
+        mask_rotated = TF.rotate(mask_tensor, angle, fill=0)
+        
+        return image_rotated.numpy(), mask_rotated.numpy()
 
     def on_epoch_end(self):
         if self.is_training:

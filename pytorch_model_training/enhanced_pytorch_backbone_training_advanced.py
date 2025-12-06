@@ -1,4 +1,6 @@
 # ENHANCED TRAINING FUNCTIONS WITH LOGGING AND PROGRESS BARS
+import sys
+sys.path.append("/kaggle/input/pytorch-model-training-new/pytorch_model_training")
 
 import os
 import yaml
@@ -821,6 +823,7 @@ def train_enhanced(config, tiles_dir, masks_dir, model_path, run_name, weights_p
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"🚀 Using device: {device}")
+
     
     # Create logging directory
     log_dir = os.path.join(model_path, 'logs')
@@ -860,7 +863,13 @@ def train_enhanced(config, tiles_dir, masks_dir, model_path, run_name, weights_p
     # Build model and loss
     model = build_unet_resnet50(
         num_classes=1, input_size=config['data']['input_size'], freeze_backbone=True
-    ).to(device)
+    )
+
+    if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        print(f"Detected {torch.cuda.device_count()} GPUs. Wrapping model in DataParallel.")
+        model = nn.DataParallel(model)
+
+    model = model.to(device)
     
     #model = build_model(1, 3 ,encoder_name="senet154").to(device)
 
@@ -1042,7 +1051,7 @@ if __name__ == "__main__":
     parser.add_argument('--run_name', required=False, help='Name of the MLFlow Run')
     args = parser.parse_args()
 
-    with open('../config/config_v1.yaml', 'r') as f:
+    with open('/kaggle/input/pytorch-model-training-new/pytorch_model_training/config_v1.yaml', 'r') as f:
         config = yaml.safe_load(f)
 
     set_gpu()

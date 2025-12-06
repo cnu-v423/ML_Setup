@@ -20,7 +20,7 @@ def convert_model_to_onnx(config):
 
 
         # weights_path = '/workspace/input/triton_models/building_models/unet_resnet50_final.pt'
-        weights_path = '/workspace/output/building_detections/trained_models/unet_resnet50_final.pt'
+        weights_path = '/workspace/input/models/10cm_model_256/unet_resnet50_final.pt'
 
         if weights_path and os.path.exists(weights_path):
             print(f"✅ Loading weights from: {weights_path}")
@@ -38,7 +38,7 @@ def convert_model_to_onnx(config):
         torch.onnx.export(
             model,
             dummy_input,
-            "model_v1.onnx",
+            "/workspace/input/models/10cm_model_256/model.onnx",
             export_params=True,
             opset_version=17,
             do_constant_folding=True,
