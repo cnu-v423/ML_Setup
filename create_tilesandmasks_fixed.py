@@ -58,8 +58,8 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024):
 
     basename = os.path.splitext(os.path.basename(input_tif))[0]
 
-    tiles_dir = os.path.join(output_dir, f"tiles_{tile_size}_{basename}_new")
-    masks_dir = os.path.join(output_dir, f"masks_{tile_size}_{basename}_new")
+    tiles_dir = os.path.join(output_dir, f"tiles_{tile_size}_{basename}")
+    masks_dir = os.path.join(output_dir, f"masks_{tile_size}_{basename}")
 
     os.makedirs(tiles_dir, exist_ok=True)
     os.makedirs(masks_dir, exist_ok=True)
@@ -83,17 +83,24 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024):
 
         if gdf.crs is None:
             print(f"Setting shapefile CRS to: {src.crs}")
-            gdf.set_crs(src.crs, inplace=True)
+            gdf = gdf.set_crs(src.crs, inplace=True)
         elif gdf.crs != src.crs:
             print(f"Reprojecting shapefile from {gdf.crs} → {src.crs}")
             gdf = gdf.to_crs(src.crs)
 
-        # Filter shapes outside raster extent
-        raster_bounds = box(*src.bounds)
-        gdf = gdf[gdf.geometry.intersects(raster_bounds)]
+        # --------------------------
+        # FILTER + CLIP SHAPES to raster extent
+        # --------------------------
+        raster_bounds_poly = gpd.GeoDataFrame(
+            {"geometry": [box(*src.bounds)]}, crs=src.crs
+        )
 
+        # 1️⃣ Keep only shapes that intersect raster
+        gdf = gpd.overlay(gdf, raster_bounds_poly, how="intersection")
+
+        # If empty — nothing intersects
         if len(gdf) == 0:
-            print(f"⚠️ Warning: No geometries intersect with {basename}")
+            print(f"⚠️ Warning: No geometries fall inside raster extent for {basename}")
             return
 
         # --------------------------
