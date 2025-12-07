@@ -772,26 +772,49 @@ class EnsemblePredictor:
                 traceback.print_exc()
                 return tile  # Return original tile instead of undefined 'image'
 
-    def normalize_tile(self, tile):
-        tile = np.transpose(tile, (2, 0, 1)) 
-        rd_ras = tile.astype(np.float32)
-        dra_img = []
-        for band in range(rd_ras.shape[0]-1):
-            arr = rd_ras[band]
-            arr1 = arr.copy()
-            thr1 = round(np.percentile(arr[arr > 0], 2.5))
-            thr2 = round(np.percentile(arr[arr > 0], 99))
-            arr1[arr1 < thr1] = thr1
-            arr1[arr1 > thr2] = thr2
-            arr1 = (arr1 - thr1) / (thr2 - thr1)
-            arr1 = arr1 * 255.
-            arr1 = np.uint8(arr1)
-            arr1[arr1 == 0] = 1.
-            dra_img.append(arr1)
+    # def normalize_tile(self, tile):
+    #     tile = np.transpose(tile, (2, 0, 1)) 
+    #     rd_ras = tile.astype(np.float32)
+    #     dra_img = []
+    #     for band in range(rd_ras.shape[0]-1):
+    #         arr = rd_ras[band]
+    #         arr1 = arr.copy()
+    #         thr1 = round(np.percentile(arr[arr > 0], 2.5))
+    #         thr2 = round(np.percentile(arr[arr > 0], 99))
+    #         arr1[arr1 < thr1] = thr1
+    #         arr1[arr1 > thr2] = thr2
+    #         arr1 = (arr1 - thr1) / (thr2 - thr1)
+    #         arr1 = arr1 * 255.
+    #         arr1 = np.uint8(arr1)
+    #         arr1[arr1 == 0] = 1.
+    #         dra_img.append(arr1)
 
-        foo = np.stack(dra_img, axis=-1)
-        foo = foo.astype(np.float32) / 255.0
-        return foo
+    #     foo = np.stack(dra_img, axis=-1)
+    #     foo = foo.astype(np.float32) / 255.0
+    #     return foo
+
+    def normalize_tile(self, tile):
+        """
+        Normalize tile using EXACT same method as training (Channel3_DataGenerator_old).
+        
+        Training used: image = image.astype(np.float32) / 255.0
+        Inference must do the same to avoid distribution mismatch!
+        
+        tile shape: (H, W, C) from rasterio.open().read()
+        """
+        print("## Normalizing tile")
+        # Convert to float32 and divide by 255
+        # This matches exactly what Channel3_DataGenerator_old does
+        tile = tile.astype(np.float32) / 255.0
+        
+        # Result: [0.004-1.0] range (because of zero→1 replacement in scale_tile)
+        # This is EXACTLY what model was trained on!
+        
+        # No percentile recomputation!
+        # No uint8 conversion!
+        # No transposing needed!
+        
+        return tile
 
 
     def predict(self, image_path, output_path):
