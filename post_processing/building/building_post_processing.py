@@ -423,7 +423,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Extract building polygons with straight lines')
     parser.add_argument('--predicted_tiff', required=True, help='Input binary TIFF file')
     parser.add_argument('--output_path', required=True, help='Output directory')
-    parser.add_argument('--dsm_path', required=True, help='DSM FILE PATH')
+    # parser.add_argument('--dsm_path', required=True, help='DSM FILE PATH')
 
     parser.add_argument('--apply_erosion',default=True, help='Output directory')
     parser.add_argument('--erosion_pixels', type=int, default=10, 
@@ -467,13 +467,13 @@ if __name__ == "__main__":
     # -----------------------------
     # RUN
     # -----------------------------
-    cleaned = extractor.filter_polygons_by_height(
-        shapefile_path_gdf=result_gdf,
-        dsm_path=args.dsm_path,
-        output_path=output_shapefile_path,
-        height_threshold=22,
-        percentage_threshold=0.60
-    )
+    # cleaned = extractor.filter_polygons_by_height(
+    #     shapefile_path_gdf=result_gdf,
+    #     dsm_path=args.dsm_path,
+    #     output_path=output_shapefile_path,
+    #     height_threshold=22,
+    #     percentage_threshold=0.60
+    # )
 
     if cleaned is not None:
         print("\nProcessing completed successfully!")

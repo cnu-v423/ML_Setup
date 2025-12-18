@@ -1,5 +1,5 @@
 data:
-  input_size: 256
+  input_size: 512
   channels: 3
   batch_size: 1
   train_split: 0.8

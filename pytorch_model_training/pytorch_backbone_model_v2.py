@@ -127,14 +127,14 @@ class Channel3_DataGenerator_older(Dataset):
             mask = (mask > 0).astype(np.float32)
             mask = np.expand_dims(mask, axis=0)
 
-        # ADD ROTATION AUGMENTATION DURING TRAINING
-        if self.is_training:
-            # Random rotation: 0°, 90°, 180°, 270° (or continuous: -45° to 45°)
-            angle = float(np.random.choice([0, 90, 180, 270]))  # 90-degree rotations
-            # OR for continuous rotation:
-            # angle = np.random.uniform(-45, 45)  # Random angle between -45 and 45 degrees
+        # # ADD ROTATION AUGMENTATION DURING TRAINING
+        # if self.is_training:
+        #     # Random rotation: 0°, 90°, 180°, 270° (or continuous: -45° to 45°)
+        #     angle = float(np.random.choice([0, 90, 180, 270]))  # 90-degree rotations
+        #     # OR for continuous rotation:
+        #     # angle = np.random.uniform(-45, 45)  # Random angle between -45 and 45 degrees
             
-            image, mask = self.rotate_image_and_mask(image, mask, angle)
+        #     image, mask = self.rotate_image_and_mask(image, mask, angle)
                 
         return torch.from_numpy(image), torch.from_numpy(mask)
     

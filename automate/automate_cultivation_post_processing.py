@@ -4,13 +4,13 @@ import subprocess
 
 def automate_post_processing():
     # Base directory where TIFF files are stored
-    predictions_dir = "/workspace/output/cultivation_predictions"
+    predictions_dir = "/workspace/input/Predictions/Cultivation_predictions"
 
     # Input shapefile (constant as per your requirement)
-    input_shapefile = "/workspace/output/Cultivation_predictions/cultivation_prediction_shapefiles/field_wise_predictions_merged_shape_file.shp"
+    input_shapefile = "/workspace/input/Predictions/Fieldwise_predictions/predictions/cultivation_predictions_merged_shape_file.shp"
 
     # Output folder
-    output_base_path = "/workspace/output/Cultivation_predictions/cultivation_prediction_shapefiles"
+    output_base_path = "/workspace/input/Predictions/Cultivation_predictions/cultivation_prediction_shapefiles_new"
 
     threshold_min = "20"
 

@@ -49,7 +49,7 @@ def scale_tile(tile):
 
     return np.stack(scaled_bands)
 
-def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_percentage=256):
+def create_tiles(input_tif, input_shp, output_dir, tile_size=1024):
     """
     Create tiles from TIF file and corresponding binary masks from SHP file.
     This version never loads the entire raster into RAM.
@@ -58,10 +58,8 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_perce
 
     basename = os.path.splitext(os.path.basename(input_tif))[0]
 
-    # tiles_dir = os.path.join(output_dir, f"tiles_{tile_size}_{basename}_new")
-    # masks_dir = os.path.join(output_dir, f"masks_{tile_size}_{basename}_new")
-    tiles_dir = os.path.join(output_dir, "tiles")
-    masks_dir = os.path.join(output_dir, "masks")
+    tiles_dir = os.path.join(output_dir, f"tiles")
+    masks_dir = os.path.join(output_dir, f"masks")
 
     os.makedirs(tiles_dir, exist_ok=True)
     os.makedirs(masks_dir, exist_ok=True)
@@ -70,12 +68,6 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_perce
     # Read raster + metadata
     # --------------------------
     with rasterio.open(input_tif) as src:
-
-        overlap_pixels = int(tile_size * overlap_percentage)
-        stride = tile_size - overlap_pixels
-
-        if stride <= 0:
-            raise ValueError("overlap_percent must be < 100")
 
         profile = src.profile.copy()
         width = src.width
@@ -91,29 +83,40 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_perce
 
         if gdf.crs is None:
             print(f"Setting shapefile CRS to: {src.crs}")
-            gdf.set_crs(src.crs, inplace=True)
+            gdf = gdf.set_crs(src.crs, inplace=True)
         elif gdf.crs != src.crs:
             print(f"Reprojecting shapefile from {gdf.crs} → {src.crs}")
             gdf = gdf.to_crs(src.crs)
 
-        # Filter shapes outside raster extent
-        raster_bounds = box(*src.bounds)
-        gdf = gdf[gdf.geometry.intersects(raster_bounds)]
+        # --------------------------
+        # FILTER + CLIP SHAPES to raster extent
+        # --------------------------
+        raster_bounds_poly = gpd.GeoDataFrame(
+            {"geometry": [box(*src.bounds)]}, crs=src.crs
+        )
 
-        if len(gdf) == 0:
-            print(f"⚠️ Warning: No geometries intersect with {basename}")
-            return
+        # # 1️⃣ Keep only shapes that intersect raster
+        # gdf = gpd.overlay(gdf, raster_bounds_poly, how="intersection")
+
+        # If shapefile has geometries → clip normally
+        if len(gdf) > 0:
+            # Remove empty geometries
+            gdf = gdf[gdf.geometry.notnull()]
+            gdf = gdf[~gdf.geometry.is_empty]
+
+            # Clip shapes
+            gdf = gpd.overlay(gdf, raster_bounds_poly, how="intersection")
+
+        # # If empty — nothing intersects
+        # if len(gdf) == 0:
+        #     print(f"⚠️ Warning: No geometries fall inside raster extent for {basename}")
+        #     return
 
         # --------------------------
         # Tile count
         # --------------------------
-        # n_tiles_h = int(np.ceil(height / tile_size))
-        # n_tiles_w = int(np.ceil(width / tile_size))
-
-        ## With Overlap
-        n_tiles_h = int(np.ceil((height - tile_size) / stride)) + 1
-        n_tiles_w = int(np.ceil((width - tile_size) / stride)) + 1
-
+        n_tiles_h = int(np.ceil(height / tile_size))
+        n_tiles_w = int(np.ceil(width / tile_size))
 
         print(f"Raster size: {width}×{height}, generating {n_tiles_h}×{n_tiles_w} tiles")
 
@@ -123,12 +126,8 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_perce
         for i in range(n_tiles_h):
             for j in range(n_tiles_w):
 
-                # col_off = j * tile_size
-                # row_off = i * tile_size
-                ## With Overlap
-                col_off = j * stride
-                row_off = i * stride
-
+                col_off = j * tile_size
+                row_off = i * tile_size
                 win_w = min(tile_size, width - col_off)
                 win_h = min(tile_size, height - row_off)
 
@@ -142,9 +141,15 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_perce
                 tile = np.zeros((num_bands, tile_size, tile_size), dtype=src.dtypes[0])
                 tile[:, :win_h, :win_w] = tile_data
 
-                # Skip empty tiles
-                if np.mean(tile) < 0.01:
+                # # Skip empty tiles
+                # if np.mean(tile) < 0.01:
+                #     continue
+
+                zero_ratio = np.count_nonzero(tile == 0) / tile.size
+
+                if zero_ratio >= 0.60:
                     continue
+
 
                 # Tile bounds
                 tile_bounds = rasterio.windows.bounds(window, transform)
@@ -152,28 +157,24 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_perce
 
                 # Intersecting geoms
                 intersecting = gdf[gdf.geometry.intersects(tile_box)]
-
-                # Filter only building class (building_i == 1)  
-                # intersecting = intersecting[intersecting["building_i"] == 1]
-
-
                 if len(intersecting) == 0:
-                    continue
+                    mask_arr = np.zeros((tile_size, tile_size), dtype=np.uint8) # Negative samples
+                    # continue
+                else : 
+                    # Rasterize mask
+                    shapes = [(geom, 1) for geom in intersecting.geometry]
 
-                # Rasterize mask
-                shapes = [(geom, 1) for geom in intersecting.geometry]
+                    mask_arr = rasterize(
+                        shapes,
+                        out_shape=(tile_size, tile_size),
+                        transform=window_transform,
+                        fill=0,
+                        all_touched=True,
+                        dtype=np.uint8
+                    )
 
-                mask_arr = rasterize(
-                    shapes,
-                    out_shape=(tile_size, tile_size),
-                    transform=window_transform,
-                    fill=0,
-                    all_touched=True,
-                    dtype=np.uint8
-                )
-
-                if np.sum(mask_arr) == 0:
-                    continue
+                # if np.sum(mask_arr) == 0:
+                #     continue
 
                 # --------------------------
                 # Save tile
@@ -189,9 +190,7 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_perce
                     'transform': window_transform,
                 })
 
-                # tile_path = os.path.join(tiles_dir, f"{basename}_{i*tile_size}_{j*tile_size}.tif")
-                tile_path = os.path.join(tiles_dir, f"{basename}_{row_off}_{col_off}.tif")
-
+                tile_path = os.path.join(tiles_dir, f"{basename}_{i*tile_size}_{j*tile_size}.tif")
 
                 with rasterio.open(tile_path, 'w', **tile_profile) as dst:
                     dst.write(scaled_tile)
@@ -209,10 +208,7 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_perce
                 })
                 mask_profile.pop("nodata", None)
 
-                # mask_path = os.path.join(masks_dir, f"{basename}_{i*tile_size}_{j*tile_size}.tif")
-                #with overlap
-                mask_path = os.path.join(masks_dir, f"{basename}_{row_off}_{col_off}.tif")
-            
+                mask_path = os.path.join(masks_dir, f"{basename}_{i*tile_size}_{j*tile_size}.tif")
 
                 with rasterio.open(mask_path, "w", **mask_profile) as dst_mask:
                     dst_mask.write(mask_arr[np.newaxis, :, :])
@@ -298,7 +294,7 @@ def process_all_files(input_dir, output_dir):
                 # full_mask_path = os.path.join(output_dir, f"{basename}_full_mask.tif")
                 # create_full_mask(str(tif_file), str(shp_file), full_mask_path)
 
-                create_tiles(str(tif_file), str(shp_file), output_dir, tile_size=config['data']['input_size'], overlap_percentage=config['data']['overlap_percentage'])
+                create_tiles(str(tif_file), str(shp_file), output_dir, tile_size=config['data']['input_size'])
                 print("Created all the tiles and respective masks")
             except Exception as e:
                 print(f"Error processing {tif_file.name}: {str(e)}")

@@ -394,7 +394,13 @@ def main():
     
     # Load all models with their respective thresholds
     model_paths = {
-        'building': ('building_unet_finetuned_256', 0.7, 'input', 'output'),
+        # 'building': ("cultivation_model_512", 0.45, "input","output"),   
+        # 'building': ('building_unet_finetuned_256_30cm', 0.48, 'input', 'output'),
+        # 'building': ('building_unet_finetuned_256', 0.2, 'input', 'output'),
+        # 'building': ('building_unet_finetuned_512', 0.2, 'input', 'output'),
+        'building': ('pakka_house_model', 0.41, 'input', 'output'),
+
+
         # 'building': ("cultivation_512", 0.343, "input","output"),   
         # 'building': ("TEMP_v2", 0.343, "input","output"),
         #'building': ("UNET_SENET154", 0.343, "input","sigmoid"),    

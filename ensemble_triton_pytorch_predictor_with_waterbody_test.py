@@ -802,7 +802,7 @@ class EnsemblePredictor:
         
         tile shape: (H, W, C) from rasterio.open().read()
         """
-        print("## Normalizing tile")
+        # print("## Normalizing tile")
         # Convert to float32 and divide by 255
         # This matches exactly what Channel3_DataGenerator_old does
         tile = tile.astype(np.float32) / 255.0
@@ -823,7 +823,7 @@ class EnsemblePredictor:
         # Read image
         with rasterio.open(image_path) as src:
             print(self.channels)
-            image = src.read(list(range(1, 5)))
+            image = src.read(list(range(1, 4)))
             transform = src.transform
             crs = src.crs
             if crs is None:
@@ -932,7 +932,7 @@ class EnsemblePredictor:
 
                     try:
                         # Perform inference for the current batch
-                        response = self.client.infer(model["model_name"], inputs, model_version="3", outputs=outputs)
+                        response = self.client.infer(model["model_name"], inputs, model_version="4", outputs=outputs)
                         batch_output = response.as_numpy(model["output_name"])
 
                         # Apply sigmoid here to convert logits → probabilities

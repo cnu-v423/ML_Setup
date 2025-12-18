@@ -1049,7 +1049,7 @@ if __name__ == "__main__":
     parser.add_argument('--run_name', required=False, help='Name of the MLFlow Run')
     args = parser.parse_args()
 
-    with open('config_v1.yaml', 'r') as f:
+    with open('../config/config_v1.yaml', 'r') as f:
         config = yaml.safe_load(f)
 
     set_gpu()

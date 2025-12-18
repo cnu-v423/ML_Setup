@@ -3,11 +3,12 @@ import subprocess
 import glob
 
 def run_predictions():
-    input_dir = "/workspace/input"
-    # output_dir = "/workspace/output/Building_predictions"
-    output_dir = "/workspace/output/Vegitation_predictions"
+    input_dir = "/workspace/input/Resampled_30cm"
+    output_dir = "/workspace/input/Predictions/Building_predictions/pakka_house_predictions"
+    # output_dir = "/workspace/output/Vegitation_predictions"
+    # output_dir = '/workspace/input/Predictions/Cultivation_predictions'
     config_path = "/workspace/ML_Setup/config/config_v1.yaml"
-    building_model_path = "/workspace/output/building_detections/building_detection_models/best_model_1747031895_v1.h5"
+    building_model_path = "dummy"
 
     tif_files = sorted(glob.glob(os.path.join(input_dir, "*.tif")))
     if not tif_files:
@@ -21,23 +22,23 @@ def run_predictions():
         print(f"\n🚀 Running prediction for: {file_name}")
         print("------------------------------------------------------------")
 
-        # cmd = [
-        #     "python",
-        #     "/workspace/ML_Setup/ensemble_triton_with_waterbody_test.py",
-        #     "--input_image", tif,
-        #     "--output_path", output_dir,
-        #     "--config", config_path,
-        #     "--building_model", building_model_path
-        # ]
-
         cmd = [
             "python",
-            "/workspace/ML_Setup/ensemble_triton_with_waterbody.py",
+            "/workspace/ML_Setup/ensemble_triton_with_waterbody_test.py",
             "--input_image", tif,
             "--output_path", output_dir,
             "--config", config_path,
             "--building_model", building_model_path
         ]
+
+        # cmd = [
+        #     "python",
+        #     "/workspace/ML_Setup/ensemble_triton_with_waterbody.py",
+        #     "--input_image", tif,
+        #     "--output_path", output_dir,
+        #     "--config", config_path,
+        #     "--building_model", building_model_path
+        # ]
 
         process = subprocess.Popen(
             cmd,
