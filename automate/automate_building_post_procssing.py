@@ -123,19 +123,19 @@ def automate_post_processing():
         print(f"\n🚀 Running post-processing for: {file_name}")
         print("------------------------------------------------------------")
         # Buildings
-        # cmd = [
-        #     "python",
-        #     "/workspace/ML_Setup/post_processing/building/post_processing_v4.py",
-        #     "--predicted_tiff", tif_path,
-        #     "--output_path", output_base_path
-        # ]
-
         cmd = [
             "python",
-            "/workspace/ML_Setup/post_processing/building/roads_post_processing.py",
+            "/workspace/ML_Setup/post_processing/building/post_processing_v4.py",
             "--predicted_tiff", tif_path,
             "--output_path", output_base_path
         ]
+
+        # cmd = [
+        #     "python",
+        #     "/workspace/ML_Setup/post_processing/building/roads_post_processing.py",
+        #     "--predicted_tiff", tif_path,
+        #     "--output_path", output_base_path
+        # ]
 
         # Live logs streaming
         process = subprocess.Popen(

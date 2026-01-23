@@ -318,35 +318,33 @@ class AdaptiveLossLayer(nn.Module):
         gamma = torch.clamp(self.gamma, min=0.0)
         class_weights = torch.clamp(self.class_weights, min=0.0)
 
-        # Clamp inputs to ensure valid ranges
-        y_pred = torch.clamp(y_pred, min=1e-7, max=1.0-1e-7)
-        y_true = torch.clamp(y_true, min=0.0, max=1.0)
+        # Ensure targets are float in [0,1]
+        y_true = torch.clamp(y_true.float(), min=0.0, max=1.0)
 
-        # ✅ FIXED: Use binary_cross_entropy (not with_logits) since model outputs probabilities
-        # This matches TensorFlow's binary_crossentropy exactly
-        bce = F.binary_cross_entropy(y_pred, y_true, reduction='none')
+        # Use BCE with logits (safe for AMP) — expects logits in y_pred
+        bce = F.binary_cross_entropy_with_logits(y_pred, y_true, reduction='none')
 
-        # ✅ Apply class weighting exactly like TensorFlow
-        # TensorFlow: class_loglosses = K.mean(K.binary_crossentropy(y_true, y_pred), axis=[0, 1, 2])
-        # TensorFlow: bce_loss = K.sum(class_loglosses * K.constant(weights))
-        class_loglosses = bce.mean(dim=[2, 3])  # Mean over spatial dimensions like TensorFlow
+        # Apply per-pixel class weighting
         if len(class_weights) > 1:
-            bce_loss = (class_loglosses * class_weights[1]).mean()  # Apply class weight
+            pos_w = class_weights[1]
         else:
-            bce_loss = class_loglosses.mean()
+            pos_w = 1.0
+        weight_map = y_true * pos_w + (1.0 - y_true) * 1.0
+        bce_weighted = (bce * weight_map).mean()
 
-        # Dice loss (works with probabilities)
-        dice = self.dice_loss(y_pred, y_true)
+        # Dice/boundary expect probabilities
+        probs = torch.sigmoid(y_pred)
+        dice = self.dice_loss(probs, y_true)
 
         # Boundary loss (works with probabilities)
         try:
-            edge_loss = self.boundary_loss(y_pred, y_true)
+            edge_loss = self.boundary_loss(probs, y_true)
         except Exception as e:
             print(f"Warning: Boundary loss calculation failed: {e}")
             edge_loss = torch.tensor(0.0, device=y_pred.device, requires_grad=True)
 
         # ✅ Combine losses with constrained weights (matching TensorFlow exactly)
-        total_loss = alpha * bce_loss + beta * dice + gamma * edge_loss
+        total_loss = alpha * bce_weighted + beta * dice + gamma * edge_loss
 
         return total_loss
 
@@ -693,9 +691,10 @@ def train_epoch_with_progress(model, train_loader, optimizer, adaptive_loss, dev
         train_loss += batch_loss
         batch_losses.append(batch_loss)
         
-        # Update metrics
+        # Update metrics using probabilities
+        outputs_prob = torch.sigmoid(outputs.detach())
         for metric in metrics.values():
-            metric.update(outputs.detach(), masks)
+            metric.update(outputs_prob, masks)
         
         # 📊 UPDATE PROGRESS BAR WITH CURRENT STATS
         if batch_idx % 10 == 0:  # Update every 10 batches to avoid slowdown
@@ -751,9 +750,10 @@ def validate_epoch_with_progress(model, val_loader, adaptive_loss, device, metri
             val_loss += batch_loss
             batch_losses.append(batch_loss)
             
-            # Update metrics
+            # Update metrics using probabilities
+            outputs_prob = torch.sigmoid(outputs)
             for metric in metrics.values():
-                metric.update(outputs, masks)
+                metric.update(outputs_prob, masks)
             
             # 📊 UPDATE PROGRESS BAR WITH CURRENT STATS
             if batch_idx % 5 == 0:  # Update every 5 batches for validation

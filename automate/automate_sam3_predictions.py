@@ -3,13 +3,8 @@ import subprocess
 import glob
 
 def run_predictions():
-    input_dir = "/workspace/input/Resampled_30cm"
-    output_dir = "/workspace/input/Predictions/Roads_predictions/new_road_predictions"
-    # output_dir = "/workspace/input/Predictions/Building_predictions/pakka_house_predictions"
-    # output_dir = "/workspace/output/Vegitation_predictions"
-    # output_dir = '/workspace/input/Predictions/Cultivation_predictions'
-    config_path = "/workspace/ML_Setup/config/config_v1.yaml"
-    building_model_path = "dummy"
+    input_dir = "/workspace/input/resampled_10cm_new"
+    output_dir = "/workspace/input/Predictions/Vegitation_predictions"
 
     tif_files = sorted(glob.glob(os.path.join(input_dir, "*.tif")))
     if not tif_files:
@@ -19,17 +14,38 @@ def run_predictions():
     print(f"🔍 Found {len(tif_files)} TIFF files to process.\n")
 
     for tif in tif_files:
-        file_name = os.path.basename(tif)
+        file_name = os.path.basename(tif)                 # e.g. image_01.tif
+        name_no_ext = os.path.splitext(file_name)[0]      # e.g. image_01
+
+        ALLOWED_FILES = {
+            # "Kuragallu_10",
+            # "Lingayapalem_10",
+            # "Malkapuram_10",
+            # "Mandadam_10",
+            # "Mangalagiri_10",
+            # "Nekkallu_10",
+            # "Nelapadu_10",
+            "Undavalli_10",
+            "Velagapudi_10",
+            "Venkatapalem_10"
+        }
+
+        if name_no_ext not in ALLOWED_FILES:
+            print(f"Skipping prediction for {file_name} as this is already predicted")
+            continue
+
         print(f"\n🚀 Running prediction for: {file_name}")
         print("------------------------------------------------------------")
 
+        # 🔥 output_dir + file_name.tif
+        output_tif_path = os.path.join(output_dir, f"{name_no_ext}.tif")
+
+
         cmd = [
             "python",
-            "/workspace/ML_Setup/ensemble_triton_with_waterbody_test.py",
-            "--input_image", tif,
-            "--output_path", output_dir,
-            "--config", config_path,
-            "--building_model", building_model_path
+            "/workspace/ML_Setup/sam3_v1.py",
+            "--input_path", tif,
+            "--output_path", output_tif_path,
         ]
 
         # cmd = [
