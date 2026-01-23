@@ -932,7 +932,7 @@ class EnsemblePredictor:
 
                     try:
                         # Perform inference for the current batch
-                        response = self.client.infer(model["model_name"], inputs, model_version="4", outputs=outputs)
+                        response = self.client.infer(model["model_name"], inputs, model_version="2", outputs=outputs)
                         batch_output = response.as_numpy(model["output_name"])
 
                         # Apply sigmoid here to convert logits → probabilities

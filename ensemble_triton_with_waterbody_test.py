@@ -398,7 +398,8 @@ def main():
         # 'building': ('building_unet_finetuned_256_30cm', 0.48, 'input', 'output'),
         # 'building': ('building_unet_finetuned_256', 0.2, 'input', 'output'),
         # 'building': ('building_unet_finetuned_512', 0.2, 'input', 'output'),
-        'building': ('pakka_house_model', 0.41, 'input', 'output'),
+        # 'building': ('pakka_house_model', 0.41, 'input', 'output'),
+        'building': ('roads_512', 0.3, 'input', 'output'),
 
 
         # 'building': ("cultivation_512", 0.343, "input","output"),   

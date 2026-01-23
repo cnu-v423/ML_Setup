@@ -26,7 +26,9 @@ from sklearn.model_selection import train_test_split
 import argparse
 import rasterio
 from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingWarmRestarts
-from torch.cuda.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler
+from torch.amp import autocast
+from contextlib import nullcontext
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import csv
@@ -257,18 +259,40 @@ class BoundaryLoss(nn.Module):
         return loss
 
 
+class TverskyLoss(nn.Module):
+    """Tversky loss - useful for highly imbalanced and thin structures (e.g., roads)"""
+    def __init__(self, alpha=0.5, beta=0.5, smooth=1e-7):
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.smooth = smooth
+
+    def forward(self, y_pred, y_true):
+        # y_pred and y_true expected to be probabilities in [0,1]
+        y_pred = y_pred.view(-1)
+        y_true = y_true.view(-1)
+
+        TP = (y_pred * y_true).sum()
+        FP = (y_pred * (1 - y_true)).sum()
+        FN = ((1 - y_pred) * y_true).sum()
+
+        tversky = (TP + self.smooth) / (TP + self.alpha * FP + self.beta * FN + self.smooth)
+        return 1.0 - tversky
+
+
 class AdaptiveLossLayer(nn.Module):
-    def __init__(self, num_classes=2):
+    def __init__(self, num_classes=1):
         super().__init__()
 
-        # ✅ Learnable parameters (matching TensorFlow exactly)
+        # Learnable parameters
         self.alpha = nn.Parameter(torch.ones(1))
         self.beta = nn.Parameter(torch.ones(1))
         self.gamma = nn.Parameter(torch.ones(1))
-        self.class_weights = nn.Parameter(torch.ones(num_classes))
+        # class_weights is a small vector; for binary segmentation keep it length 2
+        self.class_weights = nn.Parameter(torch.ones(max(1, num_classes)))
 
     def dice_loss(self, y_pred, y_true):
-        """Dice loss matching TensorFlow implementation exactly"""
+        """Dice loss for probabilities"""
         smooth = 1e-7
         intersection = (y_true * y_pred).sum()
         union = y_true.sum() + y_pred.sum()
@@ -276,27 +300,22 @@ class AdaptiveLossLayer(nn.Module):
         return 1 - dice_coef
 
     def boundary_loss(self, y_pred, y_true):
-        """Boundary loss matching TensorFlow's sobel_edges implementation"""
-        # Sobel edge detection (matching TensorFlow's sobel_edges)
+        # Reuse the existing sobel-based boundary loss
         sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(1, 1, 3, 3)
         sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).view(1, 1, 3, 3)
 
-        # Move to same device as input
         sobel_x = sobel_x.to(y_pred.device)
         sobel_y = sobel_y.to(y_pred.device)
 
-        # Apply Sobel filters
         edges_true_x = F.conv2d(y_true, sobel_x, padding=1)
         edges_true_y = F.conv2d(y_true, sobel_y, padding=1)
         edges_pred_x = F.conv2d(y_pred, sobel_x, padding=1)
         edges_pred_y = F.conv2d(y_pred, sobel_y, padding=1)
 
-        # Compute edge magnitude with numerical stability
         eps = 1e-8
         edges_true_mag_sq = edges_true_x**2 + edges_true_y**2
         edges_pred_mag_sq = edges_pred_x**2 + edges_pred_y**2
 
-        # Clamp to ensure non-negative values before sqrt
         edges_true_mag_sq = torch.clamp(edges_true_mag_sq, min=0.0)
         edges_pred_mag_sq = torch.clamp(edges_pred_mag_sq, min=0.0)
 
@@ -305,48 +324,49 @@ class AdaptiveLossLayer(nn.Module):
 
         return torch.mean(torch.abs(edges_true - edges_pred))
 
-    def forward(self, y_pred, y_true):
+    def forward(self, y_pred, y_true, use_tversky=False, tversky_alpha=0.5, tversky_beta=0.5):
+        """Combined adaptive loss.
+        Expects raw logits in `y_pred` (this uses BCE-with-logits which is safe for AMP).
+        - Uses per-pixel weighting for BCE to handle class imbalance.
+        - Optionally includes Tversky loss (helpful for roads).
         """
-        ✅ FIXED: Handle probabilities correctly (both models output probabilities via sigmoid)
-        Args:
-            y_pred: Model output with sigmoid already applied (probabilities [0,1])
-            y_true: Ground truth masks (values [0,1])
-        """
-        # ✅ Apply constraints like TensorFlow's NonNeg constraint
         alpha = torch.clamp(self.alpha, min=0.0)
         beta = torch.clamp(self.beta, min=0.0)
         gamma = torch.clamp(self.gamma, min=0.0)
         class_weights = torch.clamp(self.class_weights, min=0.0)
 
-        # Clamp inputs to ensure valid ranges
-        y_pred = torch.clamp(y_pred, min=1e-7, max=1.0-1e-7)
-        y_true = torch.clamp(y_true, min=0.0, max=1.0)
+        # Ensure targets are float in [0,1]
+        y_true = torch.clamp(y_true.float(), min=0.0, max=1.0)
 
-        # ✅ FIXED: Use binary_cross_entropy (not with_logits) since model outputs probabilities
-        # This matches TensorFlow's binary_crossentropy exactly
-        bce = F.binary_cross_entropy(y_pred, y_true, reduction='none')
+        # Use BCE with logits (safe for autocast/AMP)
+        bce = F.binary_cross_entropy_with_logits(y_pred, y_true, reduction='none')  # (N, C, H, W)
 
-        # ✅ Apply class weighting exactly like TensorFlow
-        # TensorFlow: class_loglosses = K.mean(K.binary_crossentropy(y_true, y_pred), axis=[0, 1, 2])
-        # TensorFlow: bce_loss = K.sum(class_loglosses * K.constant(weights))
-        class_loglosses = bce.mean(dim=[2, 3])  # Mean over spatial dimensions like TensorFlow
+        # Build a per-pixel weight map
         if len(class_weights) > 1:
-            bce_loss = (class_loglosses * class_weights[1]).mean()  # Apply class weight
+            pos_w = class_weights[1]
         else:
-            bce_loss = class_loglosses.mean()
+            pos_w = 1.0
 
-        # Dice loss (works with probabilities)
-        dice = self.dice_loss(y_pred, y_true)
+        weight_map = y_true * pos_w + (1.0 - y_true) * 1.0
+        bce_weighted = (bce * weight_map).mean()
 
-        # Boundary loss (works with probabilities)
+        # Convert logits to probabilities for Dice/Boundary/Tversky calculations
+        probs = torch.sigmoid(y_pred)
+
+        dice = self.dice_loss(probs, y_true)
+
         try:
-            edge_loss = self.boundary_loss(y_pred, y_true)
+            edge_loss = self.boundary_loss(probs, y_true)
         except Exception as e:
             print(f"Warning: Boundary loss calculation failed: {e}")
             edge_loss = torch.tensor(0.0, device=y_pred.device, requires_grad=True)
 
-        # ✅ Combine losses with constrained weights (matching TensorFlow exactly)
-        total_loss = alpha * bce_loss + beta * dice + gamma * edge_loss
+        total_loss = alpha * bce_weighted + beta * dice + gamma * edge_loss
+
+        # Optionally add Tversky for thin structures (expects probabilities)
+        if use_tversky:
+            tversky = TverskyLoss(alpha=tversky_alpha, beta=tversky_beta)
+            total_loss = total_loss + tversky(probs, y_true)
 
         return total_loss
 
@@ -658,8 +678,8 @@ class AdaptiveLossLogger:
         print(f"{'='*60}")
 
 
-def train_epoch_with_progress(model, train_loader, optimizer, adaptive_loss, device, metrics, epoch, stage):
-    """Enhanced training function with progress bars and detailed logging"""
+def train_epoch_with_progress(model, train_loader, optimizer, adaptive_loss, device, metrics, epoch, stage, scaler=None, use_tversky=False, tversky_alpha=0.5, tversky_beta=0.5):
+    """Enhanced training function with progress bars and detailed logging. Supports AMP via `scaler`."""
     model.train()
     train_loss = 0.0
     # Reset metrics at start of epoch
@@ -681,22 +701,32 @@ def train_epoch_with_progress(model, train_loader, optimizer, adaptive_loss, dev
         images, masks = images.to(device), masks.to(device)
         
         optimizer.zero_grad()
-        
-        # Forward pass
-        outputs = model(images)
-        loss = adaptive_loss(outputs, masks)
-        
-        # Backward pass
-        loss.backward()
-        optimizer.step()
+
+        # Forward and loss inside autocast for AMP (device-aware)
+        ctx = autocast(device_type='cuda') if device.type == 'cuda' else nullcontext()
+        with ctx:
+            outputs = model(images)
+            loss = adaptive_loss(outputs, masks, use_tversky=use_tversky, tversky_alpha=tversky_alpha, tversky_beta=tversky_beta)
+
+        # Backward pass with optional GradScaler
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
         
         batch_loss = loss.item()
         train_loss += batch_loss
         batch_losses.append(batch_loss)
         
-        # Update metrics
+        # Convert logits to probabilities for metric calculations
+        outputs_prob = torch.sigmoid(outputs.detach())
+
+        # Update metrics using probabilities
         for metric in metrics.values():
-            metric.update(outputs.detach(), masks)
+            metric.update(outputs_prob, masks)
         
         # 📊 UPDATE PROGRESS BAR WITH CURRENT STATS
         if batch_idx % 10 == 0:  # Update every 10 batches to avoid slowdown
@@ -721,7 +751,7 @@ def train_epoch_with_progress(model, train_loader, optimizer, adaptive_loss, dev
     return epoch_metrics
 
 
-def validate_epoch_with_progress(model, val_loader, adaptive_loss, device, metrics, epoch, stage):
+def validate_epoch_with_progress(model, val_loader, adaptive_loss, device, metrics, epoch, stage, use_tversky=False, tversky_alpha=0.5, tversky_beta=0.5):
     """Enhanced validation function with progress bars"""
     model.eval()
     val_loss = 0.0
@@ -745,16 +775,20 @@ def validate_epoch_with_progress(model, val_loader, adaptive_loss, device, metri
         for batch_idx, (images, masks) in enumerate(val_pbar):
             images, masks = images.to(device), masks.to(device)
             
-            outputs = model(images)
-            loss = adaptive_loss(outputs, masks)
+            # Use device-aware autocast for validation
+            ctx = autocast(device_type='cuda') if device.type == 'cuda' else nullcontext()
+            with ctx:
+                outputs = model(images)
+                loss = adaptive_loss(outputs, masks, use_tversky=use_tversky, tversky_alpha=tversky_alpha, tversky_beta=tversky_beta)
             
             batch_loss = loss.item()
             val_loss += batch_loss
             batch_losses.append(batch_loss)
             
-            # Update metrics
+            # Update metrics using probabilities
+            outputs_prob = torch.sigmoid(outputs)
             for metric in metrics.values():
-                metric.update(outputs, masks)
+                metric.update(outputs_prob, masks)
             
             # 📊 UPDATE PROGRESS BAR WITH CURRENT STATS
             if batch_idx % 5 == 0:  # Update every 5 batches for validation
@@ -836,16 +870,39 @@ def train_enhanced(config, tiles_dir, masks_dir, model_path, run_name, weights_p
     # Enhanced metrics logger
     metrics_logger = EnhancedMetricsLogger()
     
-    # Data preparation (same as before)
+    # Data preparation (with stratification for rare classes like roads)
     tiles, masks = match_tile_mask_pairs(tiles_dir, masks_dir)
     #tiles, masks = filter_bad_tiles(tiles, masks, config)
-    train_tiles, val_tiles, train_masks, val_masks = train_test_split(
-        tiles, masks,
-        test_size=config['data']['validation_split'],
-        random_state=config['data']['random_state']
-    )
 
-    # Create datasets and loaders (same as before)
+    # Compute a simple presence flag (1 if mask has any positive pixels else 0). This helps
+    # ensure validation set contains positive examples for sparse classes like roads.
+    print("🔎 Scanning masks to compute stratify flags (this may take a moment)...")
+    presence_flags = []
+    for m in masks:
+        try:
+            with rasterio.open(m) as src:
+                mask_arr = src.read(1)
+                presence_flags.append(int(mask_arr.sum() > 0))
+        except Exception:
+            presence_flags.append(0)
+
+    # Use stratified split when possible
+    try:
+        train_tiles, val_tiles, train_masks, val_masks = train_test_split(
+            tiles, masks,
+            test_size=config['data']['validation_split'],
+            random_state=config['data']['random_state'],
+            stratify=presence_flags
+        )
+    except Exception as e:
+        print(f"Warning: stratified split failed ({e}); falling back to random split")
+        train_tiles, val_tiles, train_masks, val_masks = train_test_split(
+            tiles, masks,
+            test_size=config['data']['validation_split'],
+            random_state=config['data']['random_state']
+        )
+
+    # Create datasets
     if config['data']['channels'] == 3:
         train_dataset = Channel3_DataGenerator_old(train_tiles, train_masks, config, is_training=True)
         val_dataset = Channel3_DataGenerator_old(val_tiles, val_masks, config, is_training=False)
@@ -853,10 +910,27 @@ def train_enhanced(config, tiles_dir, masks_dir, model_path, run_name, weights_p
         train_dataset = Channel4_DataGenerator(train_tiles, train_masks, config, is_training=True)
         val_dataset = Channel4_DataGenerator(val_tiles, val_masks, config, is_training=False)
 
-    train_loader = DataLoader(train_dataset, batch_size=config['data']['batch_size'], 
-                             shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=config['data']['batch_size'], 
-                           shuffle=False, num_workers=4, pin_memory=True)
+    # Optional oversampling of positive tiles
+    sampler = None
+    if config['data'].get('oversample_positive', False):
+        print("⚖️ Oversampling positive tiles to balance classes (using WeightedRandomSampler)")
+        # Compute weights: positive tiles get higher weight
+        weights = []
+        for m in train_masks:
+            try:
+                with rasterio.open(m) as src:
+                    mask_arr = src.read(1)
+                    weights.append(2.0 if mask_arr.sum() > 0 else 1.0)
+            except Exception:
+                weights.append(1.0)
+        sampler = torch.utils.data.WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
+
+    if sampler is None:
+        train_loader = DataLoader(train_dataset, batch_size=config['data']['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
+    else:
+        train_loader = DataLoader(train_dataset, batch_size=config['data']['batch_size'], sampler=sampler, num_workers=4, pin_memory=True)
+
+    val_loader = DataLoader(val_dataset, batch_size=config['data']['batch_size'], shuffle=False, num_workers=4, pin_memory=True)
 
     # Build model and loss
     model = build_unet_resnet50(
@@ -875,6 +949,14 @@ def train_enhanced(config, tiles_dir, masks_dir, model_path, run_name, weights_p
         model.load_state_dict(torch.load(weights_path, map_location=device))
 
     adaptive_loss = AdaptiveLossLayer().to(device)
+
+    # Mixed precision scaler (optional)
+    scaler = GradScaler()
+
+    # Tversky / thin-object config
+    use_tversky = config.get('training', {}).get('use_tversky', False)
+    tversky_alpha = config.get('training', {}).get('tversky_alpha', 0.5)
+    tversky_beta = config.get('training', {}).get('tversky_beta', 0.5)
 
     # Create metrics
     train_metrics = {
@@ -920,15 +1002,15 @@ def train_enhanced(config, tiles_dir, masks_dir, model_path, run_name, weights_p
     for epoch in range(total_epochs_stage1):
         current_lr = scheduler_stage1.step(epoch)
         
-        # Train with progress bars
+        # Train with progress bars (AMP enabled)
         train_results = train_epoch_with_progress(
             model, train_loader, optimizer_stage1, adaptive_loss, device, 
-            train_metrics, epoch, "Stage 1"
+            train_metrics, epoch, "Stage 1", scaler=scaler, use_tversky=use_tversky, tversky_alpha=tversky_alpha, tversky_beta=tversky_beta
         )
         
         # Validate with progress bars  
         val_results = validate_epoch_with_progress(
-            model, val_loader, adaptive_loss, device, val_metrics, epoch, "Stage 1"
+            model, val_loader, adaptive_loss, device, val_metrics, epoch, "Stage 1", use_tversky=use_tversky, tversky_alpha=tversky_alpha, tversky_beta=tversky_beta
         )
         
         # 📊 LOG ADAPTIVE LOSS PARAMETERS
@@ -971,15 +1053,15 @@ def train_enhanced(config, tiles_dir, masks_dir, model_path, run_name, weights_p
     for epoch in range(total_epochs_stage2):
         current_lr = scheduler_stage2.step(epoch)
         
-        # Train with progress bars
+        # Train with progress bars (AMP enabled)
         train_results = train_epoch_with_progress(
             model, train_loader, optimizer_stage2, adaptive_loss, device,
-            train_metrics, epoch, "Stage 2"
+            train_metrics, epoch, "Stage 2", scaler=scaler, use_tversky=use_tversky, tversky_alpha=tversky_alpha, tversky_beta=tversky_beta
         )
         
         # Validate with progress bars
         val_results = validate_epoch_with_progress(
-            model, val_loader, adaptive_loss, device, val_metrics, epoch, "Stage 2"
+            model, val_loader, adaptive_loss, device, val_metrics, epoch, "Stage 2", use_tversky=use_tversky, tversky_alpha=tversky_alpha, tversky_beta=tversky_beta
         )
         
         # 📊 LOG ADAPTIVE LOSS PARAMETERS  

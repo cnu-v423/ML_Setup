@@ -79,17 +79,17 @@ def process_building_mask_to_shapefile(input_raster_path, output_shapefile_path,
                 poly = shape(geom)
 
                 # Smooth polygon
-                poly_smooth = chaikin_smooth(poly, iterations=2)
+                poly_smooth = chaikin_smooth(poly, iterations=1)
 
-                # poly_smooth = poly_smooth.simplify(
-                #     tolerance=0.5,
-                #     preserve_topology=True
-                # )
+                poly_smooth = poly_smooth.simplify(
+                    tolerance=0.5,
+                    preserve_topology=True
+                )
 
                  # --- 🔥 REMOVE SMALL POLYGONS HERE ---
                 area = poly_smooth.area 
-                if area < 2:              # REMOVE tiny polygons (threshold = 1)
-                    continue
+                # if area < 2:              # REMOVE tiny polygons (threshold = 1)
+                #     continue
 
                 polygons.append(poly_smooth)
                 values.append(building_value)
