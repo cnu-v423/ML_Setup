@@ -1,0 +1,40 @@
+name: "vegetation_detector"
+platform: "pytorch_libtorch"
+max_batch_size: 8
+dynamic_batching {
+  preferred_batch_size: [4, 8]
+  max_queue_delay_microseconds: 100
+}
+
+input [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [7, -1, -1]
+    reshape: { shape: [7, 512, 512] }
+  }
+]
+
+output [
+  {
+    name: "output"
+    data_type: TYPE_FP32
+    dims: [1, -1, -1]
+    reshape: { shape: [1, 512, 512] }
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]
+
+optimization {
+  execution_accelerators {
+    gpu_execution_accelerator {
+      using_managed_memory: true
+    }
+  }
+}

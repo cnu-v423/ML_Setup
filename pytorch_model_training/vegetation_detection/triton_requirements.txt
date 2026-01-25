@@ -1,0 +1,44 @@
+# Vegetation Detection with Triton - Requirements
+# Install with: pip install -r triton_requirements.txt
+
+# Core PyTorch
+torch==2.1.2
+torchvision==0.16.2
+torch-cuda-version==12.1
+
+# Segmentation Models
+segmentation-models-pytorch==0.3.3
+
+# Data Processing
+numpy==1.24.3
+scipy==1.11.4
+rasterio==1.3.9
+geopandas==0.14.0
+shapely==2.0.2
+
+# Augmentation & Image Processing
+albumentations==1.3.1
+opencv-python==4.8.1.78
+scikit-image==0.22.0
+scikit-learn==1.3.2
+
+# Triton Client (for inference)
+tritonclient[all]==2.44.0
+
+# Utilities
+pandas==2.1.3
+tqdm==4.66.1
+pyyaml==6.0.1
+matplotlib==3.8.2
+pillow==10.1.0
+
+# Optional: Performance Profiling
+tensorboard==2.15.1
+wandb==0.16.4
+
+# Optional: GPU Utilities
+nvidia-pytriton==0.2.0
+
+# Optional: Optimization
+onnx==1.15.0
+onnxruntime-gpu==1.17.1
