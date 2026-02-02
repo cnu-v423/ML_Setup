@@ -49,11 +49,26 @@ def scale_tile(tile):
 
     return np.stack(scaled_bands)
 
-def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_percentage=256):
+def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_percentage=256, class_column='road_type', is_multiclass=True):
     """
-    Create tiles from TIF file and corresponding binary masks from SHP file.
+    Create tiles from TIF file and corresponding masks from SHP file.
     This version never loads the entire raster into RAM.
     It reads only each tile window directly from disk.
+    
+    Args:
+        input_tif: Path to input satellite image
+        input_shp: Path to input shapefile
+        output_dir: Output directory
+        tile_size: Size of tiles (default 1024x1024)
+        overlap_percentage: Overlap percentage (default 256 pixels on 1024)
+        class_column: Column name in shapefile containing class values (default 'road_type')
+        is_multiclass: If True, use class values from shapefile; if False, create binary masks
+    
+    Mask classes:
+        0 = Background (no road)
+        1 = Thar Road
+        2 = CC Road
+        3 = Mud/Gravel Road
     """
 
     basename = os.path.splitext(os.path.basename(input_tif))[0]
@@ -95,6 +110,27 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_perce
         elif gdf.crs != src.crs:
             print(f"Reprojecting shapefile from {gdf.crs} → {src.crs}")
             gdf = gdf.to_crs(src.crs)
+        
+        # --------------------------
+        # Validate multiclass column if needed
+        # --------------------------
+        if is_multiclass:
+            if class_column not in gdf.columns:
+                raise ValueError(f"Column '{class_column}' not found in shapefile. Available columns: {list(gdf.columns)}")
+            
+            # Check class values
+            unique_classes = sorted(gdf[class_column].unique())
+            print(f"📊 Found classes in '{class_column}': {unique_classes}")
+            
+            # Validate class values are in expected range (0-3 or 1-3)
+            valid_classes = set(unique_classes)
+            expected_classes = {1, 2, 3}  # Thar, CC, Mud/Gravel
+            
+            if not valid_classes.issubset(expected_classes):
+                print(f"⚠️ WARNING: Found unexpected class values: {valid_classes - expected_classes}")
+                print(f"   Expected values: 1 (Thar), 2 (CC), 3 (Mud/Gravel)")
+            
+            print(f"✅ MultiClass mode: Using '{class_column}' attribute for mask values")
 
         # Filter shapes outside raster extent
         raster_bounds = box(*src.bounds)
@@ -156,12 +192,17 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_perce
                 # Filter only building class (building_i == 1)  
                 # intersecting = intersecting[intersecting["building_i"] == 1]
 
-
                 if len(intersecting) == 0:
                     continue
 
-                # Rasterize mask
-                shapes = [(geom, 1) for geom in intersecting.geometry]
+                # Rasterize mask with class values
+                if is_multiclass:
+                    # Use class values from the specified column
+                    shapes = [(geom, int(road_class)) for geom, road_class in 
+                             zip(intersecting.geometry, intersecting[class_column])]
+                else:
+                    # Binary mask: all roads get value 1
+                    shapes = [(geom, 1) for geom in intersecting.geometry]
 
                 mask_arr = rasterize(
                     shapes,
@@ -217,7 +258,10 @@ def create_tiles(input_tif, input_shp, output_dir, tile_size=1024, overlap_perce
                 with rasterio.open(mask_path, "w", **mask_profile) as dst_mask:
                     dst_mask.write(mask_arr[np.newaxis, :, :])
 
-                print(f"Saved tile + mask → {i}_{j}")
+                # Print class distribution for this tile
+                unique_vals, counts = np.unique(mask_arr, return_counts=True)
+                class_info = ", ".join([f"Class {int(v)}:{c}" for v, c in zip(unique_vals, counts)])
+                print(f"Saved tile + mask → {i}_{j} | {class_info}")
 
     print("✅ Tiling complete!")
 
@@ -276,9 +320,15 @@ def create_full_mask(input_tif, input_shp, output_mask_path):
  
         print(f"Full mask saved to: {output_mask_path}")
 
-def process_all_files(input_dir, output_dir):
+def process_all_files(input_dir, output_dir, class_column='road_type', is_multiclass=True):
     """
     Process all TIF and SHP files in input directory
+    
+    Args:
+        input_dir: Directory with input TIF and SHP files
+        output_dir: Output directory for tiles and masks
+        class_column: Column name in shapefile for class values
+        is_multiclass: Whether to create multiclass or binary masks
     """
     # Get all TIF files
     tif_files = list(Path(input_dir).glob("*.tif"))
@@ -298,33 +348,52 @@ def process_all_files(input_dir, output_dir):
                 # full_mask_path = os.path.join(output_dir, f"{basename}_full_mask.tif")
                 # create_full_mask(str(tif_file), str(shp_file), full_mask_path)
 
-                create_tiles(str(tif_file), str(shp_file), output_dir, tile_size=config['data']['input_size'], overlap_percentage=config['data']['overlap_percentage'])
-                print("Created all the tiles and respective masks")
+                create_tiles(
+                    str(tif_file), 
+                    str(shp_file), 
+                    output_dir, 
+                    tile_size=config['data']['input_size'], 
+                    overlap_percentage=config['data']['overlap_percentage'],
+                    class_column=class_column,
+                    is_multiclass=is_multiclass
+                )
+                print("✅ Created all the tiles and respective masks")
             except Exception as e:
-                print(f"Error processing {tif_file.name}: {str(e)}")
+                print(f"❌ Error processing {tif_file.name}: {str(e)}")
         else:
-            print(f"No corresponding SHP file found for {tif_file.name}")
+            print(f"❌ No corresponding SHP file found for {tif_file.name}")
 
 if __name__ == "__main__":
     # Example usage
     # input_directory = "/home/vinay/Downloads/buildingwithUC_Rectified_data"
     # output_directory = "/home/vinay/Downloads/buildingwithUC_Rectified_train_1024"
 
-    parser = argparse.ArgumentParser(description='tiles and masks creation')
-    parser.add_argument('--input_dir', required=True, help='Directory containing input tiles')
-    parser.add_argument('--output_dir', required=True, help='Directory containing input masks')
+    parser = argparse.ArgumentParser(description='Create tiles and masks for road classification')
+    parser.add_argument('--input_dir', required=True, help='Directory containing input TIF and SHP files')
+    parser.add_argument('--output_dir', required=True, help='Output directory for tiles and masks')
+    parser.add_argument('--class_column', default='road_type', help='Column name in shapefile containing class values (default: road_type)')
+    parser.add_argument('--multiclass', action='store_true', default=True, help='Create multiclass masks (default: True)')
+    parser.add_argument('--binary', action='store_true', help='Create binary masks instead of multiclass')
     args = parser.parse_args()
     
+    # Determine if multiclass or binary
+    is_multiclass = not args.binary
 
     input_folder = os.path.abspath(args.input_dir)
     output_folder = os.path.abspath(args.output_dir)
-
 
     # input_folder = os.path.abspath(input_folder)
     # output_folder = os.path.abspath(output_folder)
     
     # Confirm with user
-    print(f"\nInput folder:  {input_folder}")
-    print(f"Output folder: {output_folder}")
-    print("Processing..")
-    process_all_files(input_folder, output_folder)
+    print(f"\n{'='*60}")
+    print(f"🗺️  ROAD CLASSIFICATION TILE & MASK CREATION")
+    print(f"{'='*60}")
+    print(f"Input folder:    {input_folder}")
+    print(f"Output folder:   {output_folder}")
+    print(f"Class column:    {args.class_column}")
+    print(f"Mode:            {'MULTICLASS' if is_multiclass else 'BINARY'}")
+    print(f"{'='*60}")
+    print("Processing..\n")
+    
+    process_all_files(input_folder, output_folder, class_column=args.class_column, is_multiclass=is_multiclass)
