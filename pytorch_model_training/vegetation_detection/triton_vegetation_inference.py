@@ -235,7 +235,10 @@ class TritonVegetationPredictor:
             
             # Verify 3 bands (RGB)
             if src.count != 3:
-                raise ValueError(f"Expected 3 bands (RGB), got {src.count}")
+                print(f"Expected 3 bands (RGB), got {src.count}")
+                rgb_data = src.read(list(range(1, 4)))
+            else:
+                rgb_data = src.read()  # Read all bands if exactly 3
             
             print(f"📊 Image size: {width}x{height}")
             print(f"🔹 Tile size: {tile_size}x{tile_size} with {overlap}px overlap")

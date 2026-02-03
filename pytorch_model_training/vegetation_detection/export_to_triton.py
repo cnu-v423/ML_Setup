@@ -39,7 +39,7 @@ def create_vegetation_model():
     return VegetationModel(model, adapter)
 
 
-def export_to_triton(model_path, output_dir, model_name="vegetation_detector"):
+def export_to_triton(model_path, output_dir, model_name="vegetation_detector", tile_size=512):
     """
     Export PyTorch model to Triton format
     
@@ -70,7 +70,7 @@ def export_to_triton(model_path, output_dir, model_name="vegetation_detector"):
     model.eval()
     
     # Create dummy input (batch_size=1, 7 channels, 512x512)
-    dummy_input = torch.randn(1, 7, 512, 512).to(device)
+    dummy_input = torch.randn(1, 7, tile_size, tile_size).to(device)
     
     # Trace model
     traced_model = torch.jit.trace(model, dummy_input)
@@ -82,7 +82,7 @@ def export_to_triton(model_path, output_dir, model_name="vegetation_detector"):
     
     # Create config
     config_file = os.path.join(output_dir, model_name, "config.pbtxt")
-    config_content = '''name: "vegetation_detector"
+    config_content = '''name: "vegetation_256"
 platform: "pytorch_libtorch"
 max_batch_size: 8
 dynamic_batching {
@@ -94,7 +94,7 @@ input [
   {
     name: "images"
     data_type: TYPE_FP32
-    dims: [7, 512, 512]
+    dims: [7, 256, 256]
   }
 ]
 
@@ -102,7 +102,7 @@ output [
   {
     name: "output"
     data_type: TYPE_FP32
-    dims: [1, 512, 512]
+    dims: [1, 256, 256]
   }
 ]
 
@@ -112,14 +112,6 @@ instance_group [
     count: 1
   }
 ]
-
-optimization {
-  execution_accelerators {
-    gpu_execution_accelerator {
-      using_managed_memory: true
-    }
-  }
-}
 '''
     
     with open(config_file, 'w') as f:
@@ -138,4 +130,4 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    export_to_triton(args.model_path, args.output_dir, args.model_name)
+    export_to_triton(args.model_path, args.output_dir, args.model_name, tile_size=256)

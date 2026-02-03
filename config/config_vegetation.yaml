@@ -4,7 +4,7 @@
 
 data:
   # Input processing
-  input_size: 512                    # Tile size in pixels (512px = 51.2m at 0.1m res)
+  input_size: 256                    # Tile size in pixels (512px = 51.2m at 0.1m res)
   channels: 3                        # Input RGB channels
   num_classes: 1                     # Binary (vegetation vs background)
   
@@ -14,7 +14,7 @@ data:
   random_state: 42                   # Reproducibility
   
   # Batch processing
-  batch_size: 8                      # Increase if GPU memory allows (16, 32)
+  batch_size: 1                    # Increase if GPU memory allows (16, 32)
   num_workers: 4                     # Parallel data loading
   pin_memory: true                   # Faster GPU data transfer
 

@@ -10,18 +10,18 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import segmentation_models_pytorch as smp
-from pytorch_backbone_model_v2 import (
-    get_callbacks,
-    build_unet_resnet50,
-    create_ensemble_model,
-    BuildingRecall,
-    BuildingPrecision,
-    BuildingIoU,
-    F1Score
-)
+# from pytorch_backbone_model_v2 import (
+#     get_callbacks,
+#     build_unet_resnet50,
+#     create_ensemble_model,
+#     BuildingRecall,
+#     BuildingPrecision,
+#     BuildingIoU,
+#     F1Score
+# )
 
 import time
-from backup_utils import backup_project
+# from backup_utils import backup_project
 import glob
 import math
 from sklearn.model_selection import train_test_split
@@ -122,8 +122,17 @@ class VegetationDataGenerator(Dataset):
         if self.is_training:
             np.random.shuffle(self.indexes)
         
-        # Aggressive augmentation for vegetation detection
+        # Augmentation for vegetation detection
+        # Split into RGB-only (for color-based) and channel-agnostic augmentations
         if self.is_training:
+            # RGB-only augmentations (applied before combining with vegetation indices)
+            self.rgb_aug = A.Compose([
+                A.RandomBrightnessContrast(brightness_limit=0.25, contrast_limit=0.35, p=0.6),
+                A.HueSaturationValue(hue_shift_limit=15, sat_shift_limit=25, 
+                                    val_shift_limit=15, p=0.4),
+            ])
+            
+            # Channel-agnostic augmentations (applied to combined features)
             self.aug = A.Compose([
                 # Geometric transforms
                 A.HorizontalFlip(p=0.5),
@@ -132,11 +141,6 @@ class VegetationDataGenerator(Dataset):
                 A.Rotate(limit=45, border_mode=cv2.BORDER_REFLECT, p=0.3),
                 A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.15, 
                                    rotate_limit=15, border_mode=cv2.BORDER_REFLECT, p=0.5),
-                
-                # Vegetation-specific augmentations
-                A.RandomBrightnessContrast(brightness_limit=0.25, contrast_limit=0.35, p=0.6),
-                A.HueSaturationValue(hue_shift_limit=15, sat_shift_limit=25, 
-                                    val_shift_limit=15, p=0.4),
                 
                 # Noise augmentation (subtle for vegetation)
                 A.GaussNoise(var_limit=(5.0, 15.0), p=0.2),
@@ -153,6 +157,7 @@ class VegetationDataGenerator(Dataset):
                 
             ], additional_targets={'mask': 'mask'})
         else:
+            self.rgb_aug = None
             self.aug = None
     
     def __len__(self):
@@ -171,20 +176,31 @@ class VegetationDataGenerator(Dataset):
             mask = src.read(1)  # shape: (H, W)
             mask = (mask > 0).astype(np.uint8)  # Binary mask
         
-        # Compute vegetation indices
+        # Apply RGB-only augmentations first (brightness, hue, saturation)
+        if self.is_training and hasattr(self, 'rgb_aug'):
+            # Convert RGB to HWC for albumentations
+            rgb_hwc = np.moveaxis(rgb_image, 0, -1)  # (H, W, 3)
+            rgb_uint8 = (np.clip(rgb_hwc, 0, 1) * 255).astype(np.uint8)
+            
+            # Apply RGB-specific augmentations
+            rgb_augmented = self.rgb_aug(image=rgb_uint8)
+            rgb_image = (rgb_augmented['image'].astype(np.float32) / 255.0)
+            rgb_image = np.moveaxis(rgb_image, -1, 0)  # (3, H, W)
+        
+        # Compute vegetation indices from (possibly augmented) RGB
         veg_indices = compute_vegetation_indices(rgb_image)  # (7, H, W)
         
         # Combine RGB with vegetation indices
         combined_features = veg_indices.astype(np.float32)  # (7, H, W)
         
-        # Apply augmentations during training
+        # Apply channel-agnostic augmentations during training
         if self.is_training and self.aug is not None:
             # Convert to HWC for albumentations
             combined_hwc = np.moveaxis(combined_features, 0, -1)  # (H, W, 7)
             combined_uint8 = (np.clip(combined_hwc, 0, 1) * 255).astype(np.uint8)
             mask_hwc = np.expand_dims(mask, axis=-1)  # (H, W, 1)
             
-            # Create augmented version with mapping for 7 channels
+            # Apply channel-agnostic augmentations
             augmented = self.aug(image=combined_uint8, mask=mask_hwc)
             aug_image = augmented['image']
             aug_mask = augmented['mask']
@@ -703,7 +719,7 @@ if __name__ == "__main__":
     parser.add_argument('--weights_path', default=None, help='Pre-trained weights')
     args = parser.parse_args()
     
-    with open('../config/config_vegetation.yaml', 'r') as f:
+    with open('../../config/config_vegetation.yaml', 'r') as f:
         config = yaml.safe_load(f)
     
     set_gpu()
