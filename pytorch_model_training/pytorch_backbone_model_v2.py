@@ -277,49 +277,65 @@ class UNetWithAdapter(nn.Module):
 
 def build_unet_resnet50(input_size, num_classes, use_adapter=False, freeze_backbone=True):
     """
-    Build a U-Net with a ResNet50 encoder (ImageNet weights).
+    Build a U-Net/UNetPlusPlus model with pre-trained ImageNet encoder.
+    
+    Activation Functions Used:
+    - Binary segmentation (num_classes=1): sigmoid activation (outputs [0,1] probability per pixel)
+    - Multi-class segmentation (num_classes>1): None (outputs logits; softmax applied in loss function)
+    - Internal layers: ReLU (encoder/decoder blocks)
+    - Decoder attention: SCSE (Squeeze-and-Channel-Spatial Excitation) for learned spatial refinement
+    
     Args:
-      input_size: int, height/width of input patches
-      use_adapter: bool, if True maps 4→3 channels before feeding encoder
-      freeze_backbone: bool, if True encoder weights are frozen for stage-1 training
-    Returns: PyTorch model
+      input_size: int, height/width of input patches (e.g., 1024)
+      num_classes: int, number of output classes
+                   - 1 for binary segmentation (building/road detection)
+                   - >1 for multi-class (e.g., 4 for road types: background, Thar, CC, Mud/Gravel)
+      use_adapter: bool, if True maps multi-channel input (4-5 channels) to 3 channels via 1×1 conv
+      freeze_backbone: bool, if True encoder weights are frozen for stage-1 training (decoder only)
+    
+    Returns: PyTorch model (nn.Module)
+    
+    Notes:
+      - Binary (num_classes=1): Uses UNetPlusPlus + SENet154 + SCSE attention for precision
+      - Multi-class (num_classes>1): Uses UNetPlusPlus + EfficientNet-B4 + SCSE attention for imbalanced data
+      - Two-stage training: Stage 1 freeze backbone (10 epochs), Stage 2 unfreeze for fine-tuning (50 epochs)
     """
     
     if num_classes == 1:
-        # For binary segmentation
-        # unet = smp.Unet(
-        #     encoder_name='senet154',  # or 'seresnext101', 'efficientnet-b7'
-        #     encoder_weights='imagenet',
-        #     in_channels=3,
-        #     classes=1,
-        #     activation='sigmoid'  # We'll apply sigmoid in the loss or during inference
-        # )
-
+        # For binary segmentation (e.g., building or single-class road detection)
+        # Uses UNetPlusPlus with SENet154 encoder (attention-based, excellent for single-class)
         unet = smp.UnetPlusPlus(
-            encoder_name='senet154',  # or 'seresnext101', 'efficientnet-b7'
+            encoder_name='senet154',
             encoder_weights='imagenet',
             in_channels=3,
             classes=num_classes,
-            decoder_attention_type="scse",
-            decoder_channels=(256, 128, 64, 32, 16),
-            activation='sigmoid'  # We'll apply sigmoid in the loss or during inference
+            decoder_attention_type="scse",  # Squeeze-and-Channel-Spatial Excitation attention
+            decoder_channels=(256, 128, 64, 32, 16),  # 5-level decoder for fine spatial detail
+            activation='sigmoid'  # Binary probability [0, 1]
         )
 
     else:
-        # For multi-class segmentation
-        unet = smp.Unet(
+        # For multi-class segmentation (e.g., 4-class road types: background, Thar, CC, Mud/Gravel)
+        # Uses UNetPlusPlus with EfficientNet-B4 encoder (better for imbalanced multi-class detection)
+        # EfficientNet provides excellent feature extraction with parameter efficiency
+        # SCSE decoder attention handles thin road features (2-3 pixels wide)
+        unet = smp.UnetPlusPlus(
             encoder_name='efficientnet-b4',
             encoder_weights='imagenet',
             in_channels=3,
             classes=num_classes,
-            activation=None  # We'll apply softmax in the loss or during inference
+            decoder_attention_type="scse",  # Squeeze-and-Channel-Spatial Excitation for spatial refinement
+            decoder_channels=(256, 128, 64, 32, 16),  # Match binary model architecture
+            activation=None  # Outputs logits; softmax applied in loss function for numerical stability
         )
     
-    # Freeze encoder if requested
+    # Freeze encoder if requested (stage-1 training: decoder-only learning)
+    # Enables transfer learning by preserving ImageNet pre-trained features
     if freeze_backbone:
         for param in unet.encoder.parameters():
             param.requires_grad = False
     
+    # Optionally wrap with channel adapter for multi-channel inputs
     if use_adapter:
         adapter = PreprocessAdapter(in_channels=5, out_channels=3)
         model = UNetWithAdapter(unet, adapter)
